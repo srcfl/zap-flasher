@@ -11,9 +11,20 @@ A standalone tool for flashing Sourceful Zap firmware to ESP32-C3 devices sequen
 
 ## Installation
 
+### macOS / Linux
 ```bash
 # Install uv (recommended)
 curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Setup
+cd zap-flasher
+uv sync
+```
+
+### Windows
+```powershell
+# Install uv (recommended)
+powershell -c "irm https://astral.sh/uv/install.sh | iex"
 
 # Setup
 cd zap-flasher
