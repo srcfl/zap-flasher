@@ -427,9 +427,9 @@ class ESP32SequentialFlasher:
 
                             # Look for firmware version
                             if not firmware_version:
-                                # Match version numbers (alphanumeric, dots, hyphens, underscores)
-                                # Avoid capturing ANSI color codes by being specific about allowed chars
-                                version_match = re.search(r'firmware version:\s*([A-Za-z0-9._-]+)', line, re.IGNORECASE)
+                                # Match "firmware version: X.Y.Z" specifically
+                                # The previous regex was catching "coex firmware version: 831ec70" which appears earlier in logs
+                                version_match = re.search(r'(?<!coex )firmware version:\s*([A-Za-z0-9._-]+)', line, re.IGNORECASE)
                                 if version_match:
                                     firmware_version = version_match.group(1)
                                     print(f"✓ Found Firmware Version: {firmware_version}")
