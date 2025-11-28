@@ -262,11 +262,15 @@ class ESP32SequentialFlasher:
             # Add a small delay to ensure port is free
             time.sleep(1.5)
             
+            target_chip = chip_type if chip_type != 'auto' else 'esp32c3'
+            
             cmd = [
-                'esptool.py',
+                sys.executable, '-m', 'esptool',
                 '--port', port,
                 '--baud', str(self.baudrate),
-                '--chip', chip_type,
+                '--chip', target_chip,
+                '--before', 'default_reset',
+                '--after', 'hard_reset',
                 'erase_flash'
             ]
             
@@ -304,15 +308,19 @@ class ESP32SequentialFlasher:
                 return False
             
             # Build esptool command with all flash files
+            target_chip = chip_type if chip_type != 'auto' else 'esp32c3'
+            
             cmd = [
-                'esptool.py',
+                sys.executable, '-m', 'esptool',
                 '--port', port,
                 '--baud', str(self.baudrate),
-                '--chip', chip_type,
+                '--chip', target_chip,
+                '--before', 'default_reset',
+                '--after', 'hard_reset',
                 'write_flash',
                 '--flash_mode', 'dio',
                 '--flash_freq', '80m',
-                '--flash_size', 'detect'
+                '--flash_size', '4MB'
             ]
             
             if verify:
@@ -323,7 +331,7 @@ class ESP32SequentialFlasher:
                 cmd.extend([address, file_path])
                 print(f"  {address}: {Path(file_path).name}")
             
-            print(f"Running: {' '.join(cmd[:8])} ...")  # Show command without full paths
+            print(f"Running: {' '.join(cmd[:12])} ...")  # Show command without full paths
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             
             if result.returncode == 0:
@@ -374,83 +382,97 @@ class ESP32SequentialFlasher:
                 print(f"Listening for serial data (timeout: {timeout}s)...")
                 
                 while time.time() - start_time < timeout:
-                    if ser.in_waiting > 0:
-                        line = ser.readline().decode('utf-8', errors='ignore').strip()
-                        if line:
-                            output_lines.append(line)
-                            
-                            # Only print important lines, not everything
-                            should_print = False
-                            
-                            # Check for successful boot indicators
-                            if any(indicator in line.lower() for indicator in ['app_main', 'hello world', 'setup()', 'ready', 'starting', 'boot', 'esp32', 'chip revision']):
-                                boot_success = True
-                                should_print = True
-                            
-                            # Check for boot failures
-                            if 'invalid header' in line.lower():
-                                print(f"⚠️  Boot issue: {line}")
-                                should_print = True
-                            
-                            # Look for serial number (starts with "zap-")
-                            if not device_id:
-                                serial_patterns = [
-                                    r'serial number:\s*(zap-[A-Fa-f0-9]+)',
-                                    r'device id:\s*(zap-[A-Fa-f0-9]+)',
-                                    r'serial:\s*(zap-[A-Fa-f0-9]+)',
-                                    r'(zap-[A-Fa-f0-9]+)'  # Just look for zap- pattern anywhere
-                                ]
-                                for pattern in serial_patterns:
-                                    serial_match = re.search(pattern, line, re.IGNORECASE)
-                                    if serial_match:
-                                        device_id = serial_match.group(1)
-                                        print(f"✓ Found Serial Number: {device_id}")
-                                        should_print = True
-                                        break
-                            
-                            # Look for public key (hex values, typically 64 chars for 32 bytes)
-                            if not public_key:
-                                key_patterns = [
-                                    r'public key:\s*([A-Fa-f0-9]{32,})',
-                                    r'pubkey:\s*([A-Fa-f0-9]{32,})',
-                                    r'key:\s*([A-Fa-f0-9]{32,})',
-                                    r'([A-Fa-f0-9]{64})',  # Look for 64-char hex string
-                                    r'([A-Fa-f0-9]{32})'   # Look for 32-char hex string
-                                ]
-                                for pattern in key_patterns:
-                                    key_match = re.search(pattern, line, re.IGNORECASE)
-                                    if key_match:
-                                        public_key = key_match.group(1)
-                                        print(f"✓ Found Public Key: {public_key[:16]}...{public_key[-8:]}")
-                                        should_print = True
-                                        break
-
-                            # Look for firmware version
-                            if not firmware_version:
-                                # Match "firmware version: X.Y.Z" specifically
-                                # The previous regex was catching "coex firmware version: 831ec70" which appears earlier in logs
-                                version_match = re.search(r'(?<!coex )firmware version:\s*([A-Za-z0-9._-]+)', line, re.IGNORECASE)
-                                if version_match:
-                                    firmware_version = version_match.group(1)
-                                    print(f"✓ Found Firmware Version: {firmware_version}")
+                    try:
+                        if ser.in_waiting > 0:
+                            line = ser.readline().decode('utf-8', errors='ignore').strip()
+                            if line:
+                                output_lines.append(line)
+                                
+                                # Only print important lines, not everything
+                                should_print = False
+                                
+                                # Check for successful boot indicators
+                                if any(indicator in line.lower() for indicator in ['app_main', 'hello world', 'setup()', 'ready', 'starting', 'boot', 'esp32', 'chip revision']):
+                                    boot_success = True
                                     should_print = True
-                            
-                            # Print the line only if it's important
-                            if should_print:
-                                print(f"  {line}")
-                            
-                            # If we have both, we can break early
-                            if device_id and public_key and firmware_version:
-                                print("✓ Found serial number, public key, and firmware version!")
-                                break
-                    else:
-                        # Show progress less frequently
-                        elapsed = time.time() - start_time
-                        if time.time() - last_progress_time >= 10:  # Every 10 seconds instead of 5
-                            print(f"Still listening... ({elapsed:.0f}s elapsed, {len(output_lines)} lines captured)")
-                            last_progress_time = time.time()
-                    
-                    time.sleep(0.1)
+                                
+                                # Check for boot failures
+                                if 'invalid header' in line.lower():
+                                    print(f"⚠️  Boot issue: {line}")
+                                    should_print = True
+                                
+                                # Look for serial number (starts with "zap-")
+                                if not device_id:
+                                    serial_patterns = [
+                                        r'serial number:\s*(zap-[A-Fa-f0-9]+)',
+                                        r'device id:\s*(zap-[A-Fa-f0-9]+)',
+                                        r'serial:\s*(zap-[A-Fa-f0-9]+)',
+                                        r'(zap-[A-Fa-f0-9]+)'  # Just look for zap- pattern anywhere
+                                    ]
+                                    for pattern in serial_patterns:
+                                        serial_match = re.search(pattern, line, re.IGNORECASE)
+                                        if serial_match:
+                                            device_id = serial_match.group(1)
+                                            print(f"✓ Found Serial Number: {device_id}")
+                                            should_print = True
+                                            break
+                                
+                                # Look for public key (hex values, typically 64 chars for 32 bytes)
+                                if not public_key:
+                                    key_patterns = [
+                                        r'public key:\s*([A-Fa-f0-9]{32,})',
+                                        r'pubkey:\s*([A-Fa-f0-9]{32,})',
+                                        r'key:\s*([A-Fa-f0-9]{32,})',
+                                        r'([A-Fa-f0-9]{64})',  # Look for 64-char hex string
+                                        r'([A-Fa-f0-9]{32})'   # Look for 32-char hex string
+                                    ]
+                                    for pattern in key_patterns:
+                                        key_match = re.search(pattern, line, re.IGNORECASE)
+                                        if key_match:
+                                            public_key = key_match.group(1)
+                                            print(f"✓ Found Public Key: {public_key[:16]}...{public_key[-8:]}")
+                                            should_print = True
+                                            break
+
+                                # Look for firmware version
+                                if not firmware_version:
+                                    # Match "firmware version: X.Y.Z" specifically
+                                    # The previous regex was catching "coex firmware version: 831ec70" which appears earlier in logs
+                                    version_match = re.search(r'(?<!coex )firmware version:\s*([A-Za-z0-9._-]+)', line, re.IGNORECASE)
+                                    if version_match:
+                                        firmware_version = version_match.group(1)
+                                        print(f"✓ Found Firmware Version: {firmware_version}")
+                                        should_print = True
+                                
+                                # Print the line only if it's important
+                                if should_print:
+                                    print(f"  {line}")
+                                
+                                # If we have both, we can break early
+                                if device_id and public_key and firmware_version:
+                                    print("✓ Found serial number, public key, and firmware version!")
+                                    break
+                        else:
+                            # Show progress less frequently
+                            elapsed = time.time() - start_time
+                            if time.time() - last_progress_time >= 10:  # Every 10 seconds instead of 5
+                                print(f"Still listening... ({elapsed:.0f}s elapsed, {len(output_lines)} lines captured)")
+                                last_progress_time = time.time()
+                        
+                        time.sleep(0.1)
+                        
+                    except (serial.SerialException, OSError) as e:
+                        print(f"⚠️  Serial connection unstable: {e}")
+                        print("Attempting to reconnect...")
+                        try:
+                            ser.close()
+                            time.sleep(1.0)
+                            ser.open()
+                            print("✓ Reconnected to serial port")
+                        except Exception as reconnect_error:
+                            print(f"✗ Failed to reconnect: {reconnect_error}")
+                            # If we can't reconnect, wait a bit and try again in next loop iteration
+                            time.sleep(1.0)
                 
                 print(f"Serial read completed. Captured {len(output_lines)} lines in {time.time() - start_time:.1f}s")
                 
@@ -794,16 +816,16 @@ def debug_flash_setup(bin_dir: str = None):
         
         print("\nTesting esptool availability:")
         try:
-            result = subprocess.run(['esptool.py', '--help'], 
+            result = subprocess.run([sys.executable, '-m', 'esptool', '--help'], 
                                   capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
-                print("✅ esptool.py is available")
+                print("✅ esptool module is available")
             else:
-                print("❌ esptool.py not working properly")
+                print("❌ esptool module not working properly")
         except FileNotFoundError:
-            print("❌ esptool.py not found - install with: pip install esptool")
+            print("❌ esptool module not found - install with: pip install esptool")
         except subprocess.TimeoutExpired:
-            print("❌ esptool.py timeout")
+            print("❌ esptool timeout")
             
     except Exception as e:
         print(f"❌ Error setting up flasher: {e}")
@@ -816,7 +838,7 @@ def test_device_connection(port: str):
     try:
         # Test 1: Basic chip detection
         print("1. Testing chip detection...")
-        cmd = ['esptool.py', '--port', port, 'chip_id']
+        cmd = [sys.executable, '-m', 'esptool', '--port', port, 'chip_id']
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         
         if result.returncode == 0:
@@ -829,7 +851,7 @@ def test_device_connection(port: str):
             
         # Test 2: Flash info
         print("\n2. Reading flash info...")
-        cmd = ['esptool.py', '--port', port, 'flash_id']
+        cmd = [sys.executable, '-m', 'esptool', '--port', port, 'flash_id']
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         
         if result.returncode == 0:
@@ -867,7 +889,7 @@ def main():
     parser.add_argument('--erase', action='store_true', help='Erase flash before writing (slower but safer)')
     parser.add_argument('--quiet', '-q', action='store_true', help='Quiet mode - less verbose output')
     parser.add_argument('--baudrate', type=int, default=460800, help='Serial baudrate')
-    parser.add_argument('--timeout', type=int, default=30, help='Serial read timeout in seconds')
+    parser.add_argument('--timeout', type=int, default=60, help='Serial read timeout in seconds')
     parser.add_argument('--output-base', help='Base name for output files (e.g., my_flash_run). A timestamp will be appended.')
     
     args = parser.parse_args()
