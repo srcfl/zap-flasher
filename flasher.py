@@ -367,6 +367,7 @@ class ESP32SequentialFlasher:
                 start_time = time.time()
                 device_id = None
                 public_key = None
+                firmware_version = None
                 boot_success = False
                 last_progress_time = start_time
                 
@@ -423,14 +424,22 @@ class ESP32SequentialFlasher:
                                         print(f"✓ Found Public Key: {public_key[:16]}...{public_key[-8:]}")
                                         should_print = True
                                         break
+
+                            # Look for firmware version
+                            if not firmware_version:
+                                version_match = re.search(r'firmware version:\s*(\S+)', line, re.IGNORECASE)
+                                if version_match:
+                                    firmware_version = version_match.group(1)
+                                    print(f"✓ Found Firmware Version: {firmware_version}")
+                                    should_print = True
                             
                             # Print the line only if it's important
                             if should_print:
                                 print(f"  {line}")
                             
                             # If we have both, we can break early
-                            if device_id and public_key:
-                                print("✓ Found both serial number and public key!")
+                            if device_id and public_key and firmware_version:
+                                print("✓ Found serial number, public key, and firmware version!")
                                 break
                     else:
                         # Show progress less frequently
@@ -461,6 +470,7 @@ class ESP32SequentialFlasher:
                     'port': port,
                     'device_id': device_id,
                     'public_key': public_key,
+                    'firmware_version': firmware_version,
                     'output_lines': output_lines,
                     'boot_success': boot_success,
                     'timestamp': datetime.now().isoformat()
@@ -546,6 +556,7 @@ class ESP32SequentialFlasher:
             if serial_data:
                 result['serial_number'] = serial_data['device_id']
                 result['public_key'] = serial_data['public_key']
+                result['firmware_version'] = serial_data.get('firmware_version')
                 result['output_lines'] = serial_data['output_lines']
                 
                 if result['serial_number'] and result['public_key']:
@@ -609,6 +620,8 @@ class ESP32SequentialFlasher:
         csv_output_file = f"{output_file_base}.csv"
         print(f"CSV results will be saved to: {csv_output_file}")
         
+        firmware_version_found = False
+        
         try:
             while True:
                 print(f"{Colors.OKCYAN}\n--- Waiting for device #{device_number} on {port} ---{Colors.ENDC}")
@@ -623,6 +636,29 @@ class ESP32SequentialFlasher:
                 result = self.process_device(port, device_number, erase_first, chip_type, verify)
                 all_results.append(result)
                 
+                # Check for version update on first success
+                if result['success'] and not firmware_version_found and result.get('firmware_version'):
+                    version_str = result['firmware_version'].replace('.', '_')
+                    # Update output base and csv filename
+                    new_output_base = f"{output_file_base}_V_{version_str}"
+                    new_csv_file = f"{new_output_base}.csv"
+                    
+                    print(f"{Colors.OKGREEN}✓ Detected firmware version {result['firmware_version']}. Updating output filename.{Colors.ENDC}")
+                    print(f"  Old: {csv_output_file}")
+                    print(f"  New: {new_csv_file}")
+                    
+                    # If the old file exists (e.g. from previous runs or if we wrote headers), rename it
+                    if Path(csv_output_file).exists():
+                        try:
+                            Path(csv_output_file).rename(new_csv_file)
+                            print(f"  Renamed existing file to {new_csv_file}")
+                        except Exception as e:
+                            print(f"  Warning: Could not rename file: {e}")
+                    
+                    csv_output_file = new_csv_file
+                    output_file_base = new_output_base
+                    firmware_version_found = True
+
                 if result['success']:
                     self.append_to_csv(result, csv_output_file)
                 else:
