@@ -51,9 +51,10 @@ class Colors:
     UNDERLINE = '\033[4m'
 
 class ESP32SequentialFlasher:
-    def __init__(self, bin_dir: str = None, flash_files: dict = None, baudrate: int = 115200, quiet: bool = False):
+    def __init__(self, bin_dir: str = None, flash_files: dict = None, baudrate: int = 115200, quiet: bool = False, timeout: int = 30):
         self.baudrate = baudrate
         self.quiet = quiet
+        self.timeout = timeout
         self.results = []
         self.bin_dir_name = None
         
@@ -341,7 +342,7 @@ class ESP32SequentialFlasher:
             print(f"✗ Firmware flash error on {port}: {e}")
             return False
     
-    def read_serial_output(self, port: str, timeout: int = 20) -> Optional[Dict]:
+    def read_serial_output(self, port: str, timeout: int = 30) -> Optional[Dict]:
         """Read serial output and extract device ID and public key"""
         try:
             print(f"Reading serial output from {port}...")
@@ -350,15 +351,17 @@ class ESP32SequentialFlasher:
             ser = serial.Serial(port, self.baudrate, timeout=1)
             
             try:
+                # Clear any stale data
+                ser.reset_input_buffer()
+                
                 print(f"Resetting device on {port}...")
                 
-                # Use the exact reset method that worked in manual test
+                # Standard ESP32 reset sequence (DTR=0, RTS=1 -> Reset; DTR=0, RTS=0 -> Run)
                 ser.setDTR(False)
+                ser.setRTS(True)
                 time.sleep(0.1)
-                ser.setDTR(True)
-                time.sleep(0.1)
-                ser.setDTR(False)
-                time.sleep(2)  # Match the working test timing
+                ser.setRTS(False)
+                time.sleep(1.0)  # Give it a moment to boot
                 
                 output_lines = []
                 start_time = time.time()
@@ -538,7 +541,7 @@ class ESP32SequentialFlasher:
                     result['errors'].append('Port not available after flashing')
                     return result
             
-            serial_data = self.read_serial_output(port, timeout=20)  # Reduce timeout
+            serial_data = self.read_serial_output(port, timeout=self.timeout)
             
             if serial_data:
                 result['serial_number'] = serial_data['device_id']
@@ -826,7 +829,7 @@ def main():
     parser.add_argument('--erase', action='store_true', help='Erase flash before writing (slower but safer)')
     parser.add_argument('--quiet', '-q', action='store_true', help='Quiet mode - less verbose output')
     parser.add_argument('--baudrate', type=int, default=460800, help='Serial baudrate')
-    parser.add_argument('--timeout', type=int, default=20, help='Serial read timeout in seconds')
+    parser.add_argument('--timeout', type=int, default=30, help='Serial read timeout in seconds')
     parser.add_argument('--output-base', help='Base name for output files (e.g., my_flash_run). A timestamp will be appended.')
     
     args = parser.parse_args()
@@ -862,7 +865,7 @@ def main():
                 addr, filepath = file_spec.split(':', 1)
                 flash_files[addr] = filepath
             
-            flasher = ESP32SequentialFlasher(flash_files=flash_files, baudrate=args.baudrate, quiet=args.quiet)
+            flasher = ESP32SequentialFlasher(flash_files=flash_files, baudrate=args.baudrate, quiet=args.quiet, timeout=args.timeout)
         else:
             # Directory based
             bin_dir = None
@@ -875,7 +878,7 @@ def main():
                 print(f"Targeting project: {bin_dir}")
                 project_label = args.project
             
-            flasher = ESP32SequentialFlasher(bin_dir=bin_dir, baudrate=args.baudrate, quiet=args.quiet)
+            flasher = ESP32SequentialFlasher(bin_dir=bin_dir, baudrate=args.baudrate, quiet=args.quiet, timeout=args.timeout)
         
         # Get port
         if args.port:
